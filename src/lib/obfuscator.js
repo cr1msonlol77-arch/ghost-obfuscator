@@ -1,18 +1,28 @@
 /**
- * Ghost Obfuscator — Delta / executor-safe core
- * Fixes:
- *  1. anti-tamper used getfenv/_ENV → silent early return in Luau
- *  2. VM wrapper uses assert(loadstring) so failures are visible
- *  3. ASCII-only mangled names
- *  4. CF flatten off by default in hardened
+ * Ghost Obfuscator — Delta / executor-safe core (v1.1)
+ *
+ * Fixes vs original live site:
+ *  1. anti-tamper never uses getfenv/_ENV (silent return)
+ *  2. XOR via bit32.bxor with pure-Lua fallback
+ *  3. identifiers never start with a digit
+ *  4. strings extracted BEFORE comment strip
+ *  5. field access (.Name / :Method) not renamed
+ *  6. long-comment strip regex corrected
+ *  7. loadstring path asserts so errors are visible
+ *  8. CF flatten off by default (breaks module returns)
+ *  9. junk never injected on blank / end / else lines
  */
 
 const KEYWORDS = new Set(
-  "and.break.do.else.elseif.end.false.for.function.goto.if.in.local.nil.not.or.repeat.return.then.true.until.while.self.continue.export.type.typeof".split(".")
+  "and.break.do.else.elseif.end.false.for.function.goto.if.in.local.nil.not.or.repeat.return.then.true.until.while.self.continue.export.type.typeof".split(
+    "."
+  )
 );
 
 const RESERVED = new Set(
-  "print.tostring.tonumber.pairs.ipairs.next.select.type.error.pcall.xpcall.assert.setmetatable.getmetatable.rawget.rawset.rawequal.rawlen.unpack.table.string.math.os.io.coroutine.bit32.bit.require.script.game.workspace.wait.spawn.delay.tick.warn.typeof.Instance.Vector3.Vector2.CFrame.Color3.UDim.UDim2.Enum.task.shared._G._ENV.Ray.BrickColor.NumberSequence.ColorSequence.TweenInfo.Random.Rect.Region3.Faces.Axes.PhysicalProperties.Players.LocalPlayer.HttpGet.loadstring.load".split(".")
+  "print.tostring.tonumber.pairs.ipairs.next.select.type.error.pcall.xpcall.assert.setmetatable.getmetatable.rawget.rawset.rawequal.rawlen.unpack.table.string.math.os.io.coroutine.bit32.bit.require.script.game.workspace.wait.spawn.delay.tick.warn.typeof.Instance.Vector3.Vector2.CFrame.Color3.UDim.UDim2.Enum.task.shared._G._ENV.Ray.BrickColor.NumberSequence.ColorSequence.TweenInfo.Random.Rect.Region3.Faces.Axes.PhysicalProperties.Players.LocalPlayer.HttpGet.loadstring.load.getgenv.getrenv.getrawmetatable.setclipboard.isfolder.makefolder.writefile.readfile.isfile.listfiles".split(
+    "."
+  )
 );
 
 function randInt(a, b) {
@@ -21,7 +31,8 @@ function randInt(a, b) {
 
 function nameGen(style) {
   const used = new Set();
-  const il = ["I", "l", "1", "i", "L"];
+  const body = ["I", "l", "1", "i", "L"];
+  const first = ["I", "l", "i", "L"];
   return function next() {
     let name = "";
     let tries = 0;
@@ -30,12 +41,11 @@ function nameGen(style) {
         name = "_0x" + randInt(0x10000, 0xffffff).toString(16);
       } else {
         const len = randInt(8, 14);
-        const first = ["I", "l", "i", "L"]; // identifiers cannot start with a digit
         name = first[randInt(0, first.length - 1)];
-        for (let i = 1; i < len; i++) name += il[randInt(0, il.length - 1)];
+        for (let i = 1; i < len; i++) name += body[randInt(0, body.length - 1)];
       }
       tries++;
-    } while (used.has(name) && tries < 30);
+    } while (used.has(name) && tries < 40);
     used.add(name);
     return name;
   };
@@ -44,12 +54,24 @@ function nameGen(style) {
 function stripComments(src) {
   return src
     .replace(/--[[\[\][\s\S]*?\]\]/g, "")
-    .replace(/(^|[^\\])--[^\n]*/g, "$1");
+    .replace(/(^|[^\\\n])--[^\n]*/g, "$1");
 }
 
 function unescapeLuaString(s) {
   return s.replace(/\\(n|t|r|"|'|\\|0|a|b|f|v)/g, (_, t) => {
-    const map = { n: "\n", t: "\t", r: "\r", '"': '"', "'": "'", "\\": "\\", "0": "\0", a: "\x07", b: "\b", f: "\f", v: "\v" };
+    const map = {
+      n: "\n",
+      t: "\t",
+      r: "\r",
+      '"': '"',
+      "'": "'",
+      "\\": "\\",
+      "0": "\0",
+      a: "\x07",
+      b: "\b",
+      f: "\f",
+      v: "\v",
+    };
     return map[t] ?? t;
   });
 }
@@ -120,16 +142,21 @@ function mangleLocals(src, nextName) {
     if (!id || KEYWORDS.has(id) || RESERVED.has(id) || map.has(id)) continue;
     map.set(id, nextName());
   }
-  const re2 = /\blocal\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)+)\s*=/g;
+  const re2 =
+    /\blocal\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)+)\s*=/g;
   while ((m = re2.exec(src)) !== null) {
     for (const part of m[1].split(",").map((x) => x.trim())) {
-      if (!part || KEYWORDS.has(part) || RESERVED.has(part) || map.has(part)) continue;
+      if (!part || KEYWORDS.has(part) || RESERVED.has(part) || map.has(part))
+        continue;
       map.set(part, nextName());
     }
   }
   if (map.size === 0) return src;
   const keys = [...map.keys()].sort((a, b) => b.length - a.length);
-  const re = new RegExp("(?<![.:])\\b(" + keys.map(escapeRe).join("|") + ")\\b", "g");
+  const re = new RegExp(
+    "(?<![.:])\\b(" + keys.map(escapeRe).join("|") + ")\\b",
+    "g"
+  );
   return src.replace(re, (id) => map.get(id) ?? id);
 }
 
@@ -137,6 +164,7 @@ function mutateNumbers(src) {
   return src.replace(/(?<![\w.])(-?\d+)(?!\.\d)(?![\w])/g, (raw) => {
     const n = parseInt(raw, 10);
     if (!Number.isFinite(n) || Math.abs(n) > 1e6) return raw;
+    if (n === 0 || n === 1) return raw;
     const k = randInt(1, 999);
     return `(${n + k}-${k})`;
   });
@@ -155,10 +183,27 @@ function encryptStrings(code, strings, decoderName, key) {
   });
   const decoder =
     `local function ${decoderName}(t)\n` +
-    `  local _b = bit32 or bit\n` +
     `  local s = ""\n` +
+    `  local _bx\n` +
+    `  do\n` +
+    `    local ok, b = pcall(function() return bit32 or bit end)\n` +
+    `    if ok and b and b.bxor then\n` +
+    `      _bx = function(a, c) return b.bxor(a, c) % 256 end\n` +
+    `    else\n` +
+    `      _bx = function(a, c)\n` +
+    `        local r, bit = 0, 1\n` +
+    `        a, c = a % 256, c % 256\n` +
+    `        for _ = 1, 8 do\n` +
+    `          local ab, cb = a % 2, c % 2\n` +
+    `          if ab ~= cb then r = r + bit end\n` +
+    `          a, c, bit = (a - ab) / 2, (c - cb) / 2, bit * 2\n` +
+    `        end\n` +
+    `        return r\n` +
+    `      end\n` +
+    `    end\n` +
+    `  end\n` +
     `  for i = 1, #t do\n` +
-    `    s = s .. string.char(_b.bxor(t[i], (${key} + ((i - 1) % 7))) % 256)\n` +
+    `    s = s .. string.char(_bx(t[i], (${key} + ((i - 1) % 7))))\n` +
     `  end\n` +
     `  return s\n` +
     `end\n`;
@@ -168,22 +213,35 @@ function encryptStrings(code, strings, decoderName, key) {
 function restorePlainStrings(code, strings) {
   return code.replace(/__GHOST_STR_(\d+)__/g, (_, idx) => {
     const s = strings[Number(idx)] ?? "";
-    return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r") + '"';
+    return (
+      '"' +
+      s
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r") +
+      '"'
+    );
   });
 }
 
 function injectJunk(src, nextName) {
   const makers = [
-    () => `local ${nextName()} = function() return ${randInt(1000, 99999)} end;`,
-    () => `if (${randInt(2, 9)} * ${randInt(2, 9)}) > 0 then local ${nextName()} = ${randInt(1, 99)} end;`,
-    () => `for ${nextName()} = 1, 0 do end;`,
-    () => `local ${nextName()} = {${randInt(1, 9)},${randInt(1, 9)},${randInt(1, 9)}};`,
+    () => `local ${nextName()} = function() return ${randInt(1000, 99999)} end`,
+    () =>
+      `if (${randInt(2, 9)} * ${randInt(2, 9)}) > 0 then local ${nextName()} = ${randInt(1, 99)} end`,
+    () => `do local ${nextName()} = ${randInt(1, 9)} end`,
+    () =>
+      `local ${nextName()} = {${randInt(1, 9)},${randInt(1, 9)},${randInt(1, 9)}}`,
   ];
+  const skip = /^(end|else|elseif|until|\)|,|\])/i;
   const lines = src.split("\n");
   const out = [];
   for (const line of lines) {
     out.push(line);
-    if (Math.random() < 0.15 && line.trim().length > 0) {
+    const t = line.trim();
+    if (!t || skip.test(t) || t.startsWith("--")) continue;
+    if (Math.random() < 0.12) {
       out.push(makers[randInt(0, makers.length - 1)]());
     }
   }
@@ -210,20 +268,18 @@ function flattenCF(src, nextName) {
   );
 }
 
-/** FIX: never use getfenv/_ENV — silent return in Delta */
 function antiTamperStub(nextName) {
   const a = nextName();
   const b = nextName();
   return (
     `-- integrity (executor-safe)\n` +
     `local ${a} = true\n` +
-    `local ${b} = typeof and typeof(${a}) or type(${a})\n` +
+    `local ${b} = type(${a})\n` +
     `if ${b} == nil then end\n` +
     `pcall(function() end)\n`
   );
 }
 
-/** FIX: assert loadstring so failures are visible */
 function wrapVM(src, nextName) {
   const key = randInt(23, 200);
   const bytes = [];
@@ -237,10 +293,27 @@ function wrapVM(src, nextName) {
     `-- Ghost VM (executor-safe)\n` +
     `local ${arr} = {${bytes.join(",")}}\n` +
     `local function ${dec}(t, k)\n` +
-    `  local _b = bit32 or bit\n` +
     `  local s = ""\n` +
+    `  local _bx\n` +
+    `  do\n` +
+    `    local ok, b = pcall(function() return bit32 or bit end)\n` +
+    `    if ok and b and b.bxor then\n` +
+    `      _bx = function(a, c) return b.bxor(a, c) % 256 end\n` +
+    `    else\n` +
+    `      _bx = function(a, c)\n` +
+    `        local r, bit = 0, 1\n` +
+    `        a, c = a % 256, c % 256\n` +
+    `        for _ = 1, 8 do\n` +
+    `          local ab, cb = a % 2, c % 2\n` +
+    `          if ab ~= cb then r = r + bit end\n` +
+    `          a, c, bit = (a - ab) / 2, (c - cb) / 2, bit * 2\n` +
+    `        end\n` +
+    `        return r\n` +
+    `      end\n` +
+    `    end\n` +
+    `  end\n` +
     `  for i = 1, #t do\n` +
-    `    s = s .. string.char(_b.bxor(t[i], (k + ((i - 1) % 11))) % 256)\n` +
+    `    s = s .. string.char(_bx(t[i], (k + ((i - 1) % 11))))\n` +
     `  end\n` +
     `  return s\n` +
     `end\n` +
@@ -248,8 +321,8 @@ function wrapVM(src, nextName) {
     `local __loader = loadstring or load\n` +
     `assert(__loader, "loadstring unavailable — use an executor")\n` +
     `local ${fn}, __err = __loader(__src)\n` +
-    `assert(${fn}, __err or "compile failed")\n` +
-    `${fn}()\n`
+    `assert(${fn}, tostring(__err or "compile failed"))\n` +
+    `return ${fn}()\n`
   );
 }
 
@@ -265,11 +338,15 @@ function entropy(s) {
   return Math.round(h * 100) / 100;
 }
 
-export function obfuscate(source, options = {}) {
+function obfuscate(source, options = {}) {
   const t0 = performance.now();
   const logs = [];
   const log = (step, detail, start) =>
-    logs.push({ step, detail, ms: Math.round((performance.now() - start) * 100) / 100 });
+    logs.push({
+      step,
+      detail,
+      ms: Math.round((performance.now() - start) * 100) / 100,
+    });
 
   const opts = {
     preset: "hardened",
@@ -295,11 +372,8 @@ export function obfuscate(source, options = {}) {
   log("Tokenize", `Extracted ${strings.length} string literals`, t);
 
   t = performance.now();
-  const tokenized = stripComments(withPlaceholders);
-  const code = tokenized;
-  log("Preprocess", `Stripped comments, ${code.length} bytes`, t);
-
-  let body = tokenized;
+  let body = stripComments(withPlaceholders);
+  log("Preprocess", `Stripped comments, ${body.length} bytes`, t);
 
   if (opts.mutateNumbers) {
     t = performance.now();
@@ -356,8 +430,14 @@ export function obfuscate(source, options = {}) {
       body;
   }
 
-  const originalBytes = new Blob([source]).size;
-  const obfuscatedBytes = new Blob([body]).size;
+  const originalBytes =
+    typeof Blob !== "undefined"
+      ? new Blob([source]).size
+      : Buffer.byteLength(source);
+  const obfuscatedBytes =
+    typeof Blob !== "undefined"
+      ? new Blob([body]).size
+      : Buffer.byteLength(body);
   const compatibility = opts.virtualMachine
     ? "VM-Wrapped"
     : opts.flattenControlFlow
@@ -372,7 +452,10 @@ export function obfuscate(source, options = {}) {
     metrics: {
       originalBytes,
       obfuscatedBytes,
-      ratio: originalBytes === 0 ? 0 : Math.round((obfuscatedBytes / originalBytes) * 100) / 100,
+      ratio:
+        originalBytes === 0
+          ? 0
+          : Math.round((obfuscatedBytes / originalBytes) * 100) / 100,
       originalLines: source.split("\n").length,
       obfuscatedLines: body.split("\n").length,
       entropy: entropy(body),
@@ -381,7 +464,7 @@ export function obfuscate(source, options = {}) {
   };
 }
 
-export const PRESETS = {
+const PRESETS = {
   fast: {
     mangleIdentifiers: true,
     encryptStrings: false,
@@ -410,3 +493,9 @@ export const PRESETS = {
     virtualMachine: true,
   },
 };
+
+export { obfuscate, PRESETS };
+export default { obfuscate, PRESETS };
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { obfuscate, PRESETS };
+}
