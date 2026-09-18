@@ -1,38 +1,25 @@
 # Ghost Obfuscator (Delta-safe)
 
-Luau obfuscator engine fixed for **Delta** and other Roblox executors.
+Free standalone UI + engine. **No Lovable credits needed.**
 
-## The bug
+## Use now (no Pages wait)
 
-Old anti-tamper emitted:
+1. Clone or download this repo
+2. Open `index.html` in Chrome/Firefox
+3. Obfuscate → copy → paste into Delta
 
-```lua
-local X = getfenv and getfenv() or _ENV
-if type(X) ~= "table" then return end
-```
+## GitHub Pages
 
-`getfenv` / `_ENV` do not exist in Luau → script **returns immediately** with no error.
+Repo **Settings → Pages → Deploy from branch → `bunny` / root ( / ) → Save**
 
-## Fix
+Then: `https://cr1msonlol77-arch.github.io/ghost-obfuscator/`
 
-- Anti-tamper is executor-safe (never aborts)
-- VM wrapper uses `assert(loadstring or load)` so failures are visible
-- Hardened preset: control-flow flatten off by default
-- ASCII-only mangled names
+## Engine
 
-## Use in Lovable
+`src/lib/obfuscator.js` — no getfenv, bit32 + pure Lua XOR fallback, Delta-safe.
 
-1. Open your Ghost Obfuscator Lovable project
-2. Replace the engine with `src/lib/obfuscator.js` from this repo
-3. Wire UI to `obfuscate(source, { ...PRESETS.hardened, preset: "hardened" })`
-
-Live site: https://ghost-obfuscator.lovable.app  
-(still needs this engine swapped in via Lovable editor — GitHub alone does not auto-deploy that app)
-
-## Test
+Test input:
 
 ```lua
 print("ghost ok")
 ```
-
-Obfuscate → run in Delta → should print `ghost ok`.

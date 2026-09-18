@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ghost Obfuscator — Delta-safe Luau</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg:#0b0a12; --panel:#12101c; --border:rgba(255,255,255,.08); --text:#f2f0ff; --muted:rgba(255,255,255,.45); --cyan:#5ee7ff; --violet:#b56cff; --green:#5dff9a; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; font-family:Inter,system-ui,sans-serif; color:var(--text);
+      background:radial-gradient(1200px 600px at 20% -10%,rgba(181,108,255,.18),transparent),radial-gradient(900px 500px at 90% 10%,rgba(94,231,255,.1),transparent),var(--bg); }
+    .wrap { max-width:1100px; margin:0 auto; padding:28px 18px 48px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:22px; flex-wrap:wrap; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .logo { width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg,var(--violet),var(--cyan)); display:grid; place-items:center; font-weight:700; box-shadow:0 0 24px rgba(181,108,255,.35); }
+    .brand h1 { margin:0; font-size:18px; }
+    .brand p { margin:2px 0 0; font-size:11px; color:var(--muted); font-family:JetBrains Mono,monospace; text-transform:uppercase; letter-spacing:.14em; }
+    .badge { font-family:JetBrains Mono,monospace; font-size:11px; padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:rgba(255,255,255,.03); color:var(--cyan); }
+    .presets { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }
+    @media(max-width:720px){ .presets{grid-template-columns:1fr;} }
+    .preset { cursor:pointer; border:1px solid var(--border); background:var(--panel); border-radius:14px; padding:14px; text-align:left; color:inherit; }
+    .preset.active { border-color:rgba(181,108,255,.7); box-shadow:0 0 0 1px rgba(181,108,255,.25),0 0 28px rgba(181,108,255,.15); }
+    .preset strong { display:block; font-size:14px; margin-bottom:4px; }
+    .preset span { font-size:12px; color:var(--muted); }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    @media(max-width:900px){ .grid{grid-template-columns:1fr;} }
+    .panel { background:var(--panel); border:1px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; min-height:420px; }
+    .panel-h { display:flex; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--border); font-size:13px; font-weight:600; }
+    .panel-h .sub { font-family:JetBrains Mono,monospace; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.12em; }
+    textarea { flex:1; width:100%; border:0; resize:none; padding:14px; background:transparent; color:var(--text); font-family:JetBrains Mono,monospace; font-size:12.5px; line-height:1.55; outline:none; }
+    .actions { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+    button.primary { border:0; cursor:pointer; border-radius:12px; padding:12px 18px; font-weight:700; font-size:13px; letter-spacing:.06em; text-transform:uppercase; background:linear-gradient(90deg,var(--violet),var(--cyan)); color:#0b0a12; }
+    button.ghost { border:1px solid var(--border); background:rgba(255,255,255,.03); color:var(--text); border-radius:12px; padding:12px 14px; cursor:pointer; font-size:13px; }
+    .meta { margin-top:14px; display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+    @media(max-width:720px){ .meta{grid-template-columns:1fr 1fr;} }
+    .stat { border:1px solid var(--border); background:rgba(0,0,0,.25); border-radius:12px; padding:10px 12px; }
+    .stat label { display:block; font-family:JetBrains Mono,monospace; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.12em; }
+    .stat b { font-size:14px; color:var(--cyan); }
+    .log { margin-top:14px; border:1px solid var(--border); border-radius:12px; background:rgba(0,0,0,.25); padding:10px 12px; max-height:160px; overflow:auto; font-family:JetBrains Mono,monospace; font-size:11px; color:var(--muted); }
+    .ok { color:var(--green); }
+    footer { margin-top:22px; font-size:12px; color:var(--muted); }
+    footer a { color:var(--cyan); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo">G</div>
+        <div>
+          <h1>Ghost Obfuscator</h1>
+          <p>v1.1.1 · Delta-safe · client-side</p>
+        </div>
+      </div>
+      <div class="badge">no getfenv · bit32 fallback · free</div>
+    </header>
+
+    <div class="presets">
+      <button class="preset" data-preset="fast" type="button"><strong>Fast / Minified</strong><span>Light transforms</span></button>
+      <button class="preset active" data-preset="hardened" type="button"><strong>Hardened AST</strong><span>Recommended for Delta</span></button>
+      <button class="preset" data-preset="ghostvm" type="button"><strong>Full Ghost VM</strong><span>XOR + loadstring wrap</span></button>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <div class="panel-h"><span>Source Script</span><span class="sub">Luau input</span></div>
+        <textarea id="src" spellcheck="false">print("ghost ok")
+local Players = game:GetService("Players")
+print("player", Players.LocalPlayer and Players.LocalPlayer.Name)</textarea>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span>Obfuscated Output</span><span class="sub" id="outSub">awaiting build</span></div>
+        <textarea id="out" spellcheck="false" readonly placeholder="-- Run obfuscation to see output"></textarea>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="run" type="button">Obfuscate Script</button>
+      <button class="ghost" id="copy" type="button">Copy Output</button>
+      <button class="ghost" id="sample" type="button">Load Sample</button>
+    </div>
+
+    <div class="meta">
+      <div class="stat"><label>Original</label><b id="mIn">—</b></div>
+      <div class="stat"><label>Obfuscated</label><b id="mOut">—</b></div>
+      <div class="stat"><label>Ratio</label><b id="mRatio">—</b></div>
+      <div class="stat"><label>Compatibility</label><b id="mCompat">—</b></div>
+    </div>
+    <div class="log" id="log"><div>Pipeline idle.</div></div>
+    <footer>Engine on <a href="https://github.com/cr1msonlol77-arch/ghost-obfuscator">GitHub</a> · paste output into Delta</footer>
+  </div>
+
+  <script src="./src/lib/obfuscator.js"></script>
+  <script>
+    let preset = "hardened";
+    const $ = (id) => document.getElementById(id);
+    document.querySelectorAll(".preset").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".preset").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        preset = btn.dataset.preset;
+      });
+    });
+    function bytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1048576) return (n / 1024).toFixed(2) + " KB";
+      return (n / 1048576).toFixed(2) + " MB";
+    }
+    $("run").addEventListener("click", () => {
+      const src = $("src").value;
+      if (!src.trim()) return;
+      const { obfuscate, PRESETS } = window.GhostObfuscator;
+      try {
+        const result = obfuscate(src, { ...PRESETS[preset], preset });
+        $("out").value = result.output;
+        $("outSub").textContent = "compiled · " + bytes(result.metrics.obfuscatedBytes);
+        $("mIn").textContent = bytes(result.metrics.originalBytes);
+        $("mOut").textContent = bytes(result.metrics.obfuscatedBytes);
+        $("mRatio").textContent = result.metrics.ratio + "×";
+        $("mCompat").textContent = result.metrics.compatibility;
+        $("log").innerHTML = result.logs.map((l) => `<div class="ok">[${l.ms}ms] ${l.step} — ${l.detail}</div>`).join("");
+      } catch (e) {
+        $("log").innerHTML = `<div style="color:#ff6b6b">ERROR: ${e.message || e}</div>`;
+      }
+    });
+    $("copy").addEventListener("click", async () => {
+      const t = $("out").value; if (!t) return;
+      try { await navigator.clipboard.writeText(t); } catch { $("out").select(); document.execCommand("copy"); }
+    });
+    $("sample").addEventListener("click", () => {
+      $("src").value = 'print("ghost ok")\nlocal Players = game:GetService("Players")\nlocal lp = Players.LocalPlayer\nif lp then print("hello", lp.Name) end';
+    });
+  </script>
+</body>
+</html>
