@@ -30,8 +30,9 @@ function nameGen(style) {
         name = "_0x" + randInt(0x10000, 0xffffff).toString(16);
       } else {
         const len = randInt(8, 14);
-        name = "";
-        for (let i = 0; i < len; i++) name += il[randInt(0, il.length - 1)];
+        const first = ["I", "l", "i", "L"]; // identifiers cannot start with a digit
+        name = first[randInt(0, first.length - 1)];
+        for (let i = 1; i < len; i++) name += il[randInt(0, il.length - 1)];
       }
       tries++;
     } while (used.has(name) && tries < 30);
@@ -128,7 +129,7 @@ function mangleLocals(src, nextName) {
   }
   if (map.size === 0) return src;
   const keys = [...map.keys()].sort((a, b) => b.length - a.length);
-  const re = new RegExp("\\b(" + keys.map(escapeRe).join("|") + ")\\b", "g");
+  const re = new RegExp("(?<![.:])\\b(" + keys.map(escapeRe).join("|") + ")\\b", "g");
   return src.replace(re, (id) => map.get(id) ?? id);
 }
 
@@ -154,9 +155,10 @@ function encryptStrings(code, strings, decoderName, key) {
   });
   const decoder =
     `local function ${decoderName}(t)\n` +
+    `  local _b = bit32 or bit\n` +
     `  local s = ""\n` +
     `  for i = 1, #t do\n` +
-    `    s = s .. string.char((t[i] ~ (${key} + ((i - 1) % 7))) & 0xFF)\n` +
+    `    s = s .. string.char(_b.bxor(t[i], (${key} + ((i - 1) % 7))) % 256)\n` +
     `  end\n` +
     `  return s\n` +
     `end\n`;
@@ -235,9 +237,10 @@ function wrapVM(src, nextName) {
     `-- Ghost VM (executor-safe)\n` +
     `local ${arr} = {${bytes.join(",")}}\n` +
     `local function ${dec}(t, k)\n` +
+    `  local _b = bit32 or bit\n` +
     `  local s = ""\n` +
     `  for i = 1, #t do\n` +
-    `    s = s .. string.char((t[i] ~ (k + ((i - 1) % 11))) & 0xFF)\n` +
+    `    s = s .. string.char(_b.bxor(t[i], (k + ((i - 1) % 11))) % 256)\n` +
     `  end\n` +
     `  return s\n` +
     `end\n` +
@@ -283,17 +286,18 @@ export function obfuscate(source, options = {}) {
     ...options,
   };
 
-  let t = performance.now();
-  let code = stripComments(source);
-  log("Preprocess", `Stripped comments, ${code.length} bytes`, t);
-
   const nextName = nameGen(opts.identifierStyle === "hex" ? "hex" : "il1");
   const decoderName = nextName();
   const xorKey = randInt(17, 220);
 
-  t = performance.now();
-  const { code: tokenized, strings } = extractStrings(code);
+  let t = performance.now();
+  const { code: withPlaceholders, strings } = extractStrings(source);
   log("Tokenize", `Extracted ${strings.length} string literals`, t);
+
+  t = performance.now();
+  const tokenized = stripComments(withPlaceholders);
+  const code = tokenized;
+  log("Preprocess", `Stripped comments, ${code.length} bytes`, t);
 
   let body = tokenized;
 
